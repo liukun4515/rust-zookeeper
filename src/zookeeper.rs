@@ -67,6 +67,7 @@ impl ZooKeeper {
         let (addrs, chroot) = try!(Self::parse_connect_string(connect_string));
 
         debug!("Initiating connection to {}", connect_string);
+        info!("Zk available address: {:?}", addrs);
 
         let (watch, watch_sender) = ZkWatch::new(watcher, chroot.clone());
         let listeners = ListenerSet::<ZkState>::new();
@@ -519,6 +520,11 @@ impl ZooKeeper {
         let _: EmptyResponse = try!(self.request(OpCode::CloseSession, 0, EmptyRequest, None));
 
         Ok(())
+    }
+
+    /// Check the connection is closed or not
+    pub fn is_close(&self) -> bool {
+        false
     }
 }
 

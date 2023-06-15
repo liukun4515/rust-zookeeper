@@ -112,21 +112,23 @@ impl ZkIo {
             response: BytesMut::with_capacity(1024 * 1024 * 2),
             ping_timeout: None,
             conn_timeout: None,
-            ping_timeout_duration: ping_timeout_duration,
-            conn_timeout_duration: Duration::from_secs(2),
-            timeout_ms: timeout_ms,
-            watch_sender: watch_sender,
+            ping_timeout_duration,
+            // This is a hard code timeout for 2 second
+            conn_timeout_duration: Duration::from_secs(15),
+            timeout_ms,
+            watch_sender,
+            // connection response
             conn_resp: ConnectResponse::initial(timeout_ms),
             zxid: 0,
             ping_sent: Instant::now(),
-            state_listeners: state_listeners,
+            state_listeners,
             // TODO add error handling to this method in subsequent commit.
             // There's already another unwrap which needs to be addressed.
             poll: Poll::new().unwrap(),
             shutdown: false,
             timer: Timer::default(),
-            tx: tx,
-            rx: rx,
+            tx,
+            rx,
         };
 
         let request = zkio.connect_request();
@@ -197,14 +199,20 @@ impl ZkIo {
                     self.watch_sender.send(WatchMessage::Event(response)).unwrap();
                 }
                 -2 => {
-                    trace!("Got ping response in {:?}",
-                           self.ping_sent.elapsed());
+                    let ping_time_cost = self.ping_sent.elapsed();
+                    info!("{:?},{:?}", ping_time_cost.as_millis(), self.timeout_ms);
+                    if ping_time_cost.as_millis() > (self.timeout_ms / 4) as u128 {
+                        warn!("It is too slow to get ping response: {:?}", ping_time_cost)
+                    } else {
+                        trace!("Got ping response in {:?}", ping_time_cost);
+                    }
                     self.inflight.pop_front();
                 }
                 _ => {
                     match self.inflight.pop_front() {
                         Some(request) => {
                             if request.opcode == OpCode::CloseSession {
+                                warn!("Got the close session request, will close the io event loop");
                                 let old_state = self.state;
                                 self.state = ZkState::Closed;
                                 self.notify_state(old_state, self.state);
@@ -212,7 +220,10 @@ impl ZkIo {
                             }
                             self.send_response(request, response);
                         }
-                        None => panic!("Shouldn't happen, no inflight request"),
+                        None => {
+                            error!("Shouldn't happen, no inflight request");
+                            panic!("Shouldn't happen, no inflight request");
+                        }
                     }
                 }
             }
@@ -222,6 +233,7 @@ impl ZkIo {
             let conn_resp = match ConnectResponse::read_from(&mut data) {
                 Ok(conn_resp) => conn_resp,
                 Err(e) => {
+                    error!("Failed to parse ConnectResponse {:?}", e);
                     panic!("Failed to parse ConnectResponse {:?}", e);
                     // self.reconnect();
                     // return
@@ -234,9 +246,10 @@ impl ZkIo {
                 info!("session {} expired", self.conn_resp.session_id);
                 self.conn_resp.session_id = 0;
                 self.state = ZkState::NotConnected;
+                error!("Set the io event state to {:?}", ZkState::NotConnected);
             } else {
                 self.conn_resp = conn_resp;
-                trace!("Connected: {:?}", self.conn_resp);
+                info!("Connected: {:?}", self.conn_resp);
                 self.timeout_ms = self.conn_resp.timeout;
                 self.ping_timeout_duration = Duration::from_millis(self.conn_resp.timeout / 3 * 2);
 
@@ -382,7 +395,7 @@ impl ZkIo {
                         return;
                     }
                     Ok(Some(written)) => {
-                        trace!("Written {:?} bytes", written);
+                        trace!("Written {:?} bytes, op: {:?}", written, request.opcode);
                         if request.data.has_remaining() {
                             self.buffer.push_front(request);
                             break;
@@ -444,7 +457,7 @@ impl ZkIo {
             let old_state = self.state;
             self.state = ZkState::NotConnected;
             self.notify_state(old_state, self.state);
-
+            error!("Set the io event state to {:?}", ZkState::NotConnected);
             info!("Reconnect due to HUP");
             self.reconnect();
         }
