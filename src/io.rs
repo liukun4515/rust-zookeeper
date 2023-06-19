@@ -562,7 +562,7 @@ impl ZkIo {
         loop {
             match self.timer.poll() {
                 Some(ZkTimeout::Ping) => {
-                    info!("handle ping timeout");
+                    trace!("handle ping timeout");
                     self.clear_timeout(ZkTimeout::Ping);
                     if self.inflight.is_empty() {
                         // No inflight request indicates an idle connection. Send a ping.
