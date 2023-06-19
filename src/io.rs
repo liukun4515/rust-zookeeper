@@ -267,6 +267,7 @@ impl ZkIo {
                     self.conn_resp.session_id);
                 self.conn_resp.session_id = 0;
                 self.state = ZkState::Closed;
+                self.shutdown = true;
             } else {
                 // created the new connection from the server
                 self.conn_resp = conn_resp;
@@ -498,6 +499,7 @@ impl ZkIo {
             error!("Want to set the io event state to {:?}, but set it to close and panic", ZkState::NotConnected);
             let old_state = self.state;
             self.state = ZkState::Closed;
+            self.shutdown = true;
             self.notify_state(old_state, self.state);
             info!("Reconnect due to HUP");
             // self.reconnect();
