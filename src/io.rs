@@ -93,7 +93,7 @@ pub struct ZkIo {
     tx: Sender<RawRequest>,
     rx: Receiver<RawRequest>,
 }
-const MAX_INTERVAL_PING_MS : u64 = 10000;
+const MAX_INTERVAL_PING_MS : u64 = 20000;
 const MIN_INTERVAL_CONNECT_SERVER_MS : u64 = 5000;
 
 impl ZkIo {
@@ -109,7 +109,7 @@ impl ZkIo {
         let conn_timeout_duration = Duration::from_millis(timeout_ms / addrs.len());
 
         // max interval for ping is 10s
-        let ping_timeout_duration = Duration::from_millis(min(timeout_ms / 3,
+        let ping_timeout_duration = Duration::from_millis(max(timeout_ms / 3,
                                                               MAX_INTERVAL_PING_MS));
         info!("Init the io event:  expected session timeout {:?}, connect timeout {:?}, ping timeout {:?}",
             session_timeout_duration, conn_timeout_duration, ping_timeout_duration);
@@ -274,7 +274,7 @@ impl ZkIo {
                 self.timeout_ms = self.conn_resp.timeout;
 
                 self.conn_timeout_duration = Duration::from_millis(self.timeout_ms / self.hosts.size());
-                self.ping_timeout_duration = Duration::from_millis(min(self.timeout_ms / 3,
+                self.ping_timeout_duration = Duration::from_millis(max(self.timeout_ms / 3,
                                                                        MAX_INTERVAL_PING_MS));
 
                 info!("Io event create the connection with server successfully, \
