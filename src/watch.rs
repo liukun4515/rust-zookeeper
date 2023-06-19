@@ -81,16 +81,11 @@ impl<W: Watcher> ZkWatch<W> {
     }
 
     pub fn run(mut self) -> io::Result<()> {
-        loop {
-            match self.rx.recv() {
-                Ok(msg) => {
-                    self.process_message(msg);
-                }
-                Err(e) => {
-                    error!("Meet the error when receive watch event loop: {:?}", e);
-                }
-            }
+        while let Ok(msg) = self.rx.recv() {
+            self.process_message(msg);
         }
+        info!("End of the zk watcher loop");
+        Ok(())
     }
 
     fn process_message(&mut self, message: WatchMessage) {
