@@ -365,7 +365,7 @@ impl ZkIo {
 
             // Check if the session is still alive according to our knowledge
             if self.ping_sent.elapsed().as_secs() * 1000 > self.timeout_ms {
-                warn!("Zk session timeout, closing io event loop");
+                error!("Because the client doesn't ping server in time, the zk session may timeout, closing io event loop");
                 self.state = ZkState::Closed;
                 self.notify_state(ZkState::Connecting, self.state);
                 self.shutdown = true;
@@ -612,6 +612,7 @@ impl ZkIo {
         loop {
             // Handle loop shutdown
             if self.shutdown {
+                info!("The zk io event loop was shutdown");
                 break;
             }
 
@@ -623,7 +624,7 @@ impl ZkIo {
                 self.ready(event.token(), event.readiness());
             }
         }
-
+        info!("End of the zk io event loop");
         Ok(())
     }
 }

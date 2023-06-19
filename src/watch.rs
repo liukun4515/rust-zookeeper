@@ -84,7 +84,7 @@ impl<W: Watcher> ZkWatch<W> {
         while let Ok(msg) = self.rx.recv() {
             self.process_message(msg);
         }
-        info!("End of the zk watcher loop");
+        info!("End of the zk watcher event loop");
         Ok(())
     }
 
