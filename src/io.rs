@@ -106,14 +106,14 @@ impl ZkIo {
         trace!("ZkIo::new");
         let timeout_ms = session_timeout_duration.as_secs() * 1000 +
             session_timeout_duration.subsec_nanos() as u64 / 1000000;
-        let conn_timeout_duration = Duration::from_millis(timeout_ms / addrs.len());
+        let conn_timeout_duration = Duration::from_millis(timeout_ms / addrs.len() as u64);
 
         // max interval for ping is 10s
         let ping_timeout_duration = Duration::from_millis(max(timeout_ms / 3,
                                                               MAX_INTERVAL_PING_MS));
         info!("Init the io event:  expected session timeout {:?}, connect timeout {:?}, ping timeout {:?}",
             session_timeout_duration, conn_timeout_duration, ping_timeout_duration);
-        if timeout_ms / addrs.len() < MIN_INTERVAL_CONNECT_SERVER_MS {
+        if (timeout_ms / addrs.len() as u64) < MIN_INTERVAL_CONNECT_SERVER_MS {
             warn!("Init the io event, the connect timeout {:?} is smaller than {:?}",
                 conn_timeout_duration, Duration::from_millis(MIN_INTERVAL_CONNECT_SERVER_MS));
         }
@@ -273,14 +273,14 @@ impl ZkIo {
                 info!("Connected: {:?}", self.conn_resp);
                 self.timeout_ms = self.conn_resp.timeout;
 
-                self.conn_timeout_duration = Duration::from_millis(self.timeout_ms / self.hosts.size());
+                self.conn_timeout_duration = Duration::from_millis(self.timeout_ms / self.hosts.size() as u64);
                 self.ping_timeout_duration = Duration::from_millis(max(self.timeout_ms / 3,
                                                                        MAX_INTERVAL_PING_MS));
 
                 info!("Io event create the connection with server successfully, \
                 with session timeout {:?}, connect timeout {:?}, ping timeout {:?}",
                     Duration::from_millis(self.timeout_ms), self.conn_timeout_duration, self.ping_timeout_duration);
-                if self.timeout_ms / self.hosts.size() < MIN_INTERVAL_CONNECT_SERVER_MS {
+                if (self.timeout_ms / self.hosts.size() as u64) < MIN_INTERVAL_CONNECT_SERVER_MS {
                     warn!("Io event create the connection, but the connect time {:?} is smaller thant {:?}",
                         self.conn_timeout_duration, Duration::from_millis(MIN_INTERVAL_CONNECT_SERVER_MS));
                 }
