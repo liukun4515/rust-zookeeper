@@ -104,12 +104,25 @@ impl ZooKeeper {
                 Ok(mut addrs) => {
                     match addrs.nth(0) {
                         Some(addr) => addr,
-                        None => return Err(ZkError::BadArguments),
+                        None => {
+                            warn!("Can't get the socket address for {:?}", addr_str);
+                            continue;
+                            // return Err(ZkError::BadArguments)
+                        },
                     }
                 }
-                Err(_) => return Err(ZkError::BadArguments),
+                Err(_) => {
+                    warn!("Can't convert to the socket address for {:?}", addr_str);
+                    continue;
+                    // return Err(ZkError::BadArguments)
+                },
             };
             addrs.push(addr);
+        }
+
+        if addrs.is_empty() {
+            error!("Can't convert all connection string {:?} to socket address", connect_string);
+            return Err(ZkError::BadArguments);
         }
 
         Ok((addrs, chroot))

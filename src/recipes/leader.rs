@@ -279,8 +279,9 @@ fn ensure_path(zk: &ZooKeeper, path: &str) -> ZkResult<()> {
 }
 
 fn handle_znode_change(latch: &LeaderLatch, ev: WatchedEvent) {
+    log::info!("receive znode watch event {:?}", ev);
     if let WatchedEventType::NodeDeleted = ev.event_type {
-        log::info!("receive {:?}, the path {:?}", ev.event_type, ev.path);
+        log::info!("receive znode watch event {:?}, the path {:?}", ev.event_type, ev.path);
         if let Err(e) = latch.check_leadership() {
             // TODO: how to do if got error when check leader ship:
             // 1. this latch has created the znode in the zk server
@@ -297,7 +298,7 @@ fn handle_znode_change(latch: &LeaderLatch, ev: WatchedEvent) {
 
 fn handle_state_change(latch: &LeaderLatch, zk_state: ZkState) {
     if let ZkState::Closed = zk_state {
-        log::warn!("got the {:?} with zookeeper, and need to set LeaderLatch to Failed", zk_state);
+        log::warn!("got the connection closed notification with zookeeper, and need to set LeaderLatch to Failed");
         latch.set_leadership(false);
         let error = ZkError::ConnectionLoss;
         latch.become_failed(error);
