@@ -348,6 +348,14 @@ impl ZkIo {
         self.state != ZkState::Closed && self.state != ZkState::AuthFailed
     }
 
+    fn reconnect_by_close(&mut self) {
+        let old_state = self.state;
+        self.state = ZkState::Closed;
+        info!("reconnect by close: from state {:?} to state {:?}", old_state, ZkState::Closed);
+        self.notify_state(old_state, self.state);
+        self.shutdown = true;
+    }
+
     fn reconnect(&mut self) {
         trace!("reconnect");
         if !self.is_alive() {
@@ -441,7 +449,8 @@ impl ZkIo {
                 match self.sock.try_write_buf(&mut request.data) {
                     Ok(Some(0)) => {
                         warn!("Connection write closed: op {:?}, watch {:?}", request.opcode, request.watch);
-                        self.reconnect();
+                        self.reconnect_by_close();
+                        // self.reconnect();
                         return;
                     }
                     Ok(Some(written)) => {
@@ -467,7 +476,8 @@ impl ZkIo {
                         match e.kind() {
                             ErrorKind::WouldBlock => error!("Got WouldBlock IO Error, no need to reconnect."),
                             _ => {
-                                self.reconnect();
+                                self.reconnect_by_close();
+                                // self.reconnect();
                                 return;
                             }
                         }
@@ -480,7 +490,8 @@ impl ZkIo {
             match self.sock.try_read_buf(&mut self.response) {
                 Ok(Some(0)) => {
                     warn!("Connection read closed");
-                    self.reconnect();
+                    self.reconnect_by_close();
+                    // self.reconnect();
                     return;
                 }
                 Ok(Some(read)) => {
@@ -493,13 +504,13 @@ impl ZkIo {
                     match e.kind() {
                         ErrorKind::WouldBlock => trace!("Got WouldBlock IO Error, no need to reconnect."),
                         _ => {
-                            self.reconnect();
+                            self.reconnect_by_close();
+                            // self.reconnect();
                             return;
                         }
                     }
                 }
             }
-
         }
 
         if (ready.is_hup()) && (self.state != ZkState::Closed) {
@@ -598,7 +609,8 @@ impl ZkIo {
                     self.clear_timeout(ZkTimeout::Connect);
                     if self.state == ZkState::Connecting {
                         info!("Reconnect due to connection timeout");
-                        self.reconnect();
+                        self.reconnect_by_close();
+                        // self.reconnect();
                     }
                 },
                 None => {
