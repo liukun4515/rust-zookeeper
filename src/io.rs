@@ -23,6 +23,7 @@ use std::mem;
 const ZK: Token = Token(1);
 const TIMER: Token = Token(2);
 const CHANNEL: Token = Token(3);
+const SESSION_TIMER: Token = Token(4);
 
 use try_io::{TryRead, TryWrite};
 
@@ -68,6 +69,7 @@ impl Hosts {
 enum ZkTimeout {
     Ping,
     Connect,
+    Session,
 }
 
 pub struct ZkIo {
@@ -92,6 +94,8 @@ pub struct ZkIo {
     shutdown: bool,
     tx: Sender<RawRequest>,
     rx: Receiver<RawRequest>,
+    session_timeout: Option<Timeout>,
+    session_timer: Timer<ZkTimeout>,
 }
 const MAX_INTERVAL_PING_MS : u64 = 20000;
 const MIN_INTERVAL_CONNECT_SERVER_MS : u64 = 5000;
@@ -146,10 +150,14 @@ impl ZkIo {
             timer: Timer::default(),
             tx,
             rx,
+            session_timeout: None,
+            session_timer: Timer::default()
         };
 
         let request = zkio.connect_request();
         zkio.buffer.push_back(request);
+        // // begin the session timeout
+        // zkio.update_session_timeout();
         zkio
     }
 
@@ -299,6 +307,11 @@ impl ZkIo {
         }
     }
 
+    fn update_session_timeout(&mut self) {
+        info!("update session timeout");
+        self.start_session_timeout(ZkTimeout::Session);
+    }
+
     fn send_response(&self, request: RawRequest, response: RawResponse) {
         match request.listener {
             Some(ref listener) => {
@@ -312,6 +325,22 @@ impl ZkIo {
         }
     }
 
+    fn clear_session_timeout(&mut self, atype: ZkTimeout) {
+        info!("clear session timeout");
+        let timeout = match atype {
+            ZkTimeout::Session => {
+                mem::replace(&mut self.session_timeout , None)
+            },
+            other => {
+                panic!("Not support type {:?} for clear session timeout", other);
+            }
+        };
+        if let Some(timeout) = timeout {
+            trace!("clear_session_timeout: {:?}", atype);
+            self.session_timer.cancel_timeout(&timeout);
+        }
+    }
+
     fn clear_timeout(&mut self, atype: ZkTimeout) {
         let timeout = match atype {
             ZkTimeout::Ping => {
@@ -320,12 +349,33 @@ impl ZkIo {
             ZkTimeout::Connect => {
                 mem::replace(&mut self.conn_timeout , None)
             },
+            ZkTimeout::Session => {
+                panic!("Not support session for clear timeout");
+            }
         };
         if let Some(timeout) = timeout {
             trace!("clear_timeout: {:?}", atype);
             self.timer.cancel_timeout(&timeout);
         }
     }
+
+    fn start_session_timeout(&mut self, atype: ZkTimeout) {
+        self.clear_session_timeout(atype.clone());
+        trace!("start_session_timeout: {:?}", atype);
+        match atype {
+            ZkTimeout::Session => {
+                // session timeout + 1s
+                let duration = Duration::from_millis(self.timeout_ms + 1000);
+                self.session_timeout = Some(self.session_timer.set_timeout(duration, atype));
+            }
+            other => {
+                panic!("Not support type {:?} for start session timeout", other);
+            }
+        }
+        self.poll.reregister(&self.session_timer, SESSION_TIMER, Ready::readable(), pollopt())
+            .expect("Reregister SESSION TIMER");
+    }
+
 
     fn start_timeout(&mut self, atype: ZkTimeout) {
         self.clear_timeout(atype.clone());
@@ -339,6 +389,9 @@ impl ZkIo {
                 let duration = self.conn_timeout_duration.clone();
                 self.conn_timeout = Some(self.timer.set_timeout(duration, atype));
             },
+            ZkTimeout::Session => {
+                panic!("Not support session for start timeout");
+            }
         }
         self.poll.reregister(&self.timer, TIMER, Ready::readable(), pollopt())
             .expect("Reregister TIMER");
@@ -349,6 +402,9 @@ impl ZkIo {
     }
 
     fn reconnect_by_close(&mut self) {
+        // clear the session timeout
+        self.clear_session_timeout(ZkTimeout::Session);
+
         let old_state = self.state;
         self.state = ZkState::Closed;
         info!("reconnect by close: from state {:?} to state {:?}", old_state, ZkState::Closed);
@@ -437,6 +493,7 @@ impl ZkIo {
             ZK => self.ready_zk(ready),
             TIMER => self.ready_timer(ready),
             CHANNEL => self.ready_channel(ready),
+            SESSION_TIMER => self.ready_session_timer(ready),
             _ => unreachable!(),
         }
     }
@@ -497,6 +554,8 @@ impl ZkIo {
                 Ok(Some(read)) => {
                     trace!("Read {:?} bytes", read);
                     self.handle_response();
+                    // when receive response from the zk server,
+                    self.update_session_timeout();
                 }
                 Ok(None) => trace!("Spurious read"),
                 Err(e) => {
@@ -584,6 +643,28 @@ impl ZkIo {
             .expect("Reregister CHANNEL");
     }
 
+    fn ready_session_timer(&mut self, _: Ready) {
+        trace!("ready_session_timer thread={:?}", ::std::thread::current().id());
+        loop {
+            match self.session_timer.poll() {
+                Some(ZkTimeout::Session) => {
+                    warn!("handle session timeout: client session timeout, have not heard from server in {:?}ms",
+                        self.timeout_ms);
+                    self.reconnect_by_close();
+                },
+                Some(timeout)=> panic!("Not right type {:?} for session timer", timeout),
+                None => {
+                    if self.session_timeout.is_some() {
+                        trace!("Spurious session timer");
+                        self.poll.reregister(&self.session_timer, SESSION_TIMER, Ready::readable(), pollopt())
+                            .expect("Reregister SESSION TIMER");
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
     fn ready_timer(&mut self, _: Ready) {
         trace!("ready_timer thread={:?}", ::std::thread::current().id());
 
@@ -613,6 +694,9 @@ impl ZkIo {
                         // self.reconnect();
                     }
                 },
+                Some(ZkTimeout::Session) => {
+                    panic!("Not support session timeout for timer");
+                },
                 None => {
                     if self.ping_timeout.is_some() || self.conn_timeout.is_some() {
                         trace!("Spurious timer");
@@ -639,6 +723,10 @@ impl ZkIo {
             .expect("Register TIMER");
         self.poll.register(&self.rx, CHANNEL, Ready::readable(), pollopt())
             .expect("Register CHANNEL");
+
+        // session timer
+        self.poll.register(&self.session_timer, SESSION_TIMER, Ready::readable(), pollopt())
+            .expect("Register SESSION_TIMER");
 
         loop {
             // Handle loop shutdown
