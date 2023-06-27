@@ -69,7 +69,11 @@ impl Hosts {
 enum ZkTimeout {
     Ping,
     Connect,
-    Session,
+}
+
+#[derive(Clone, Debug)]
+enum ZkSessionTimeout {
+    Session
 }
 
 pub struct ZkIo {
@@ -94,8 +98,9 @@ pub struct ZkIo {
     shutdown: bool,
     tx: Sender<RawRequest>,
     rx: Receiver<RawRequest>,
+    // timeout and timer for session
     session_timeout: Option<Timeout>,
-    session_timer: Timer<ZkTimeout>,
+    session_timer: Timer<ZkSessionTimeout>,
     session_sent: Instant,
 }
 const MAX_INTERVAL_PING_MS : u64 = 20000;
@@ -311,7 +316,7 @@ impl ZkIo {
 
     fn update_session_timeout(&mut self) {
         info!("update session timeout");
-        self.start_session_timeout(ZkTimeout::Session);
+        self.start_session_timeout();
         self.session_sent = Instant::now();
     }
 
@@ -328,17 +333,10 @@ impl ZkIo {
         }
     }
 
-    fn clear_session_timeout(&mut self, atype: ZkTimeout) {
-        let timeout = match atype {
-            ZkTimeout::Session => {
-                mem::replace(&mut self.session_timeout , None)
-            },
-            other => {
-                panic!("Not support type {:?} for clear session timeout", other);
-            }
-        };
+    fn clear_session_timeout(&mut self) {
+        let timeout = mem::replace(&mut self.session_timeout , None);
         if let Some(timeout) = timeout {
-            trace!("clear_session_timeout: {:?}", atype);
+            trace!("clear_session_timeout: Session");
             self.session_timer.cancel_timeout(&timeout);
         }
     }
@@ -351,9 +349,6 @@ impl ZkIo {
             ZkTimeout::Connect => {
                 mem::replace(&mut self.conn_timeout , None)
             },
-            ZkTimeout::Session => {
-                panic!("Not support session for clear timeout");
-            }
         };
         if let Some(timeout) = timeout {
             trace!("clear_timeout: {:?}", atype);
@@ -361,19 +356,11 @@ impl ZkIo {
         }
     }
 
-    fn start_session_timeout(&mut self, atype: ZkTimeout) {
-        self.clear_session_timeout(atype.clone());
-        trace!("start_session_timeout: {:?}", atype);
-        match atype {
-            ZkTimeout::Session => {
-                // session timeout + 1s
-                let duration = Duration::from_millis(self.timeout_ms + 1000);
-                self.session_timeout = Some(self.session_timer.set_timeout(duration, atype));
-            }
-            other => {
-                panic!("Not support type {:?} for start session timeout", other);
-            }
-        }
+    fn start_session_timeout(&mut self) {
+        self.clear_session_timeout();
+        trace!("start_session_timeout: Session");
+        let duration = Duration::from_millis(self.timeout_ms + 1000);
+        self.session_timeout = Some(self.session_timer.set_timeout(duration, ZkSessionTimeout::Session));
         self.poll.reregister(&self.session_timer, SESSION_TIMER, Ready::readable(), pollopt())
             .expect("Reregister SESSION TIMER");
     }
@@ -391,9 +378,6 @@ impl ZkIo {
                 let duration = self.conn_timeout_duration.clone();
                 self.conn_timeout = Some(self.timer.set_timeout(duration, atype));
             },
-            ZkTimeout::Session => {
-                panic!("Not support session for start timeout");
-            }
         }
         self.poll.reregister(&self.timer, TIMER, Ready::readable(), pollopt())
             .expect("Reregister TIMER");
@@ -405,7 +389,7 @@ impl ZkIo {
 
     fn reconnect_by_close(&mut self) {
         // clear the session timeout
-        self.clear_session_timeout(ZkTimeout::Session);
+        self.clear_session_timeout();
 
         let old_state = self.state;
         self.state = ZkState::Closed;
@@ -649,12 +633,12 @@ impl ZkIo {
         trace!("ready_session_timer thread={:?}", ::std::thread::current().id());
         loop {
             match self.session_timer.poll() {
-                Some(ZkTimeout::Session) => {
+                Some(ZkSessionTimeout::Session) => {
                     warn!("handle session timeout: client session timeout, have not heard from server in {:?}",
                         self.session_sent.elapsed());
                     self.reconnect_by_close();
                 },
-                Some(timeout)=> panic!("Not right type {:?} for session timer", timeout),
+                Some(session_timeout) => panic!("Not right type {:?} for session timer", session_timeout),
                 None => {
                     if self.session_timeout.is_some() {
                         trace!("Spurious session timer");
@@ -695,9 +679,6 @@ impl ZkIo {
                         self.reconnect_by_close();
                         // self.reconnect();
                     }
-                },
-                Some(ZkTimeout::Session) => {
-                    panic!("Not support session timeout for timer");
                 },
                 None => {
                     if self.ping_timeout.is_some() || self.conn_timeout.is_some() {
