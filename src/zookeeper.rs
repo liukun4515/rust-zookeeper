@@ -7,6 +7,7 @@ use listeners::{ListenerSet, Subscription};
 use mio_extras::channel::Sender as MioSender;
 use watch::{Watch, Watcher, WatchType, ZkWatch};
 use std::convert::From;
+use std::fmt::{Debug, Formatter};
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::result;
 use std::string::ToString;
@@ -29,6 +30,12 @@ pub struct RawRequest {
 pub struct RawResponse {
     pub header: ReplyHeader,
     pub data: ByteBuf,
+}
+
+impl Debug for RawResponse {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Raw Response header {:?}", self.header)
+    }
 }
 
 /// The client interface for interacting with a ZooKeeper cluster.
@@ -144,6 +151,7 @@ impl ZooKeeper {
             opcode: opcode,
         };
         let buf = try!(to_len_prefixed_buf(rh, req).map_err(|_| ZkError::MarshallingError));
+
 
         let (resp_tx, resp_rx) = sync_channel(0);
         let request = RawRequest {

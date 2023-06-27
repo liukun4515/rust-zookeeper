@@ -1,7 +1,6 @@
 use std::cmp::min;
 use consts::{ZkError, ZkState};
-use proto::{ByteBuf, ConnectRequest, ConnectResponse, OpCode, ReadFrom, ReplyHeader, RequestHeader,
-            WriteTo};
+use proto::{ByteBuf, ConnectRequest, ConnectResponse, OpCode, ReadFrom, ReplyHeader, RequestHeader, SetWatchesRequest, to_len_prefixed_buf, WriteTo};
 use watch::WatchMessage;
 use zookeeper::{RawResponse, RawRequest};
 use listeners::ListenerSet;
@@ -25,12 +24,19 @@ const TIMER: Token = Token(2);
 const CHANNEL: Token = Token(3);
 const SESSION_TIMER: Token = Token(4);
 
+// Copy from the java
+const NOTIFICATION_XID: i32 = -1;
+const PING_XID: i32 = -2;
+const AUTHPACKET_XID: i32 = -4;
+const SET_WATCHES_XID: i32 = -8;
+
 use try_io::{TryRead, TryWrite};
 
 lazy_static! {
     static ref PING: ByteBuf =
     RequestHeader{xid: -2, opcode: OpCode::Ping}.to_len_prefixed_buf().unwrap();
 }
+
 
 struct Hosts {
     addrs: Vec<SocketAddr>,
@@ -226,12 +232,12 @@ impl ZkIo {
             }; // TODO COPY!
             match response.header.xid {
                 // NOTIFICATION_XID
-                -1 => {
+                NOTIFICATION_XID => {
                     info!("handle_response Got a watch event, header: {:?}", response.header);
                     self.watch_sender.send(WatchMessage::Event(response)).unwrap();
                 }
                 // PING_XID
-                -2 => {
+                PING_XID => {
                     let ping_time_cost = self.ping_sent.elapsed();
                     if ping_time_cost.as_millis() > (self.timeout_ms / 4) as u128 {
                         // too slow between the client the zk server
@@ -241,6 +247,13 @@ impl ZkIo {
                         trace!("Got ping response in {:?}", ping_time_cost);
                     }
                     self.inflight.pop_front();
+                }
+                AUTHPACKET_XID => {
+                    error!("Got auth pack xid");
+                    panic!("Got auth pack xid");
+                }
+                SET_WATCHES_XID => {
+                    info!("=====Got set watches xid: {:?}", response);
                 }
                 _ => {
                     info!("handle_response Got other event, header: {:?}", response.header);
@@ -386,14 +399,18 @@ impl ZkIo {
     }
 
     fn reconnect_by_close(&mut self) {
+
         // clear the session timeout
         self.clear_session_timeout();
 
-        let old_state = self.state;
-        self.state = ZkState::Closed;
-        info!("reconnect by close: from state {:?} to state {:?}", old_state, ZkState::Closed);
-        self.notify_state(old_state, self.state);
-        self.shutdown = true;
+        // let old_state = self.state;
+        // self.state = ZkState::Closed;
+        // info!("reconnect by close: from state {:?} to state {:?}", old_state, ZkState::Closed);
+        // self.notify_state(old_state, self.state);
+        // self.shutdown = true;
+
+
+        self.reconnect();
     }
 
     fn reconnect(&mut self) {
@@ -446,8 +463,14 @@ impl ZkIo {
             }
             self.start_timeout(ZkTimeout::Connect);
 
+            // connect request
             let request = self.connect_request();
             self.buffer.push_back(request);
+
+            // set watches request
+            // TODO: get all watches path
+            let watches_request = self.watch_request();
+            self.buffer.push_back(watches_request);
 
 
             // Register the new socket
@@ -464,6 +487,27 @@ impl ZkIo {
         let buf = conn_req.to_len_prefixed_buf().unwrap();
         RawRequest {
             opcode: OpCode::Auth,
+            data: buf,
+            listener: None,
+            watch: None,
+        }
+    }
+
+    fn watch_request(&self) -> RawRequest {
+        let record = SetWatchesRequest {
+            relateive_zxid: self.zxid,
+            data_watches: vec![],
+            exist_watches: vec![],
+            child_watches: vec![],
+        };
+        let opcode = OpCode::SetWatches;
+        let request_header = RequestHeader {
+            xid: SET_WATCHES_XID,
+            opcode,
+        };
+        let buf = to_len_prefixed_buf(request_header, record).expect("can't serialize the set watches request");
+        RawRequest {
+            opcode,
             data: buf,
             listener: None,
             watch: None,
@@ -634,7 +678,16 @@ impl ZkIo {
                 Some(ZkSessionTimeout::Session) => {
                     warn!("handle session timeout: client session timeout, have not heard from server in {:?}",
                         self.session_sent.elapsed());
-                    self.reconnect_by_close();
+
+                    // TODO can be deleted.
+                    self.clear_session_timeout();
+                    let old_state = self.state;
+                    self.state = ZkState::Closed;
+                    info!("reconnect by close: from state {:?} to state {:?}", old_state, ZkState::Closed);
+                    self.notify_state(old_state, self.state);
+                    self.shutdown = true;
+
+                    // self.reconnect_by_close();
                 },
                 None => {
                     if self.session_timeout.is_some() {
