@@ -315,7 +315,7 @@ impl ZkIo {
     }
 
     fn update_session_timeout(&mut self) {
-        info!("update session timeout");
+        trace!("update session timeout");
         self.start_session_timeout();
         self.session_sent = Instant::now();
     }
