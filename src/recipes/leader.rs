@@ -221,10 +221,15 @@ impl LeaderLatch {
 
     fn become_failed(&self, zk_error: ZkError) {
         log::warn!("set state to Failed, the error is: {:?}", zk_error);
-        let prev_state = self.set_state(State::Started, State::Failed);
+
+        let mut prev_state = self.set_state(State::Started, State::Failed);
         if prev_state != State::Started {
-            panic!("cannot start leader latch in state: {:?}", prev_state);
+            prev_state = self.set_state(State::Failed, State::Failed);
+            if prev_state != State::Failed {
+                panic!("cannot set state to Failed, leader latch in state: {:?}", prev_state);
+            }
         }
+
         // set the error message to the latch
         let error = &mut *self.error.lock().unwrap();
         *error = Some(zk_error);
@@ -279,14 +284,16 @@ fn ensure_path(zk: &ZooKeeper, path: &str) -> ZkResult<()> {
 }
 
 fn handle_znode_change(latch: &LeaderLatch, ev: WatchedEvent) {
+    log::info!("receive znode watch event {:?}", ev);
     if let WatchedEventType::NodeDeleted = ev.event_type {
-        log::info!("receive {:?}, the path {:?}", ev.event_type, ev.path);
+        log::info!("receive znode watch event {:?}, the path {:?}", ev.event_type, ev.path);
         if let Err(e) = latch.check_leadership() {
             // TODO: how to do if got error when check leader ship:
             // 1. this latch has created the znode in the zk server
             // 2. when `check_leadership`, meet some issues about network or other issues
             // 3. this latch will lost the role of leader, and other latch can't become the leader
             log::error!("failed to check for leadership: {:?}", e);
+            // TODO: don't change the leader ship
             latch.set_leadership(false);
             // change the latch state to failed
             // this is should be handled by user
@@ -297,9 +304,11 @@ fn handle_znode_change(latch: &LeaderLatch, ev: WatchedEvent) {
 
 fn handle_state_change(latch: &LeaderLatch, zk_state: ZkState) {
     if let ZkState::Closed = zk_state {
-        log::warn!("got the {:?} with zookeeper, and need to set LeaderLatch to Failed", zk_state);
+        log::warn!("got the connection closed notification with zookeeper, and need to set LeaderLatch to Failed");
+        // TODO: don't change the leader ship
         latch.set_leadership(false);
         let error = ZkError::ConnectionLoss;
+        // maybe got the close signal before start the leader election
         latch.become_failed(error);
     }
 }
