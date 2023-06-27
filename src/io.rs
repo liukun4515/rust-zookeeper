@@ -96,6 +96,7 @@ pub struct ZkIo {
     rx: Receiver<RawRequest>,
     session_timeout: Option<Timeout>,
     session_timer: Timer<ZkTimeout>,
+    session_sent: Instant,
 }
 const MAX_INTERVAL_PING_MS : u64 = 20000;
 const MIN_INTERVAL_CONNECT_SERVER_MS : u64 = 5000;
@@ -151,7 +152,8 @@ impl ZkIo {
             tx,
             rx,
             session_timeout: None,
-            session_timer: Timer::default()
+            session_timer: Timer::default(),
+            session_sent: Instant::now(),
         };
 
         let request = zkio.connect_request();
@@ -310,6 +312,7 @@ impl ZkIo {
     fn update_session_timeout(&mut self) {
         info!("update session timeout");
         self.start_session_timeout(ZkTimeout::Session);
+        self.session_sent = Instant::now();
     }
 
     fn send_response(&self, request: RawRequest, response: RawResponse) {
@@ -326,7 +329,6 @@ impl ZkIo {
     }
 
     fn clear_session_timeout(&mut self, atype: ZkTimeout) {
-        info!("clear session timeout");
         let timeout = match atype {
             ZkTimeout::Session => {
                 mem::replace(&mut self.session_timeout , None)
@@ -648,8 +650,8 @@ impl ZkIo {
         loop {
             match self.session_timer.poll() {
                 Some(ZkTimeout::Session) => {
-                    warn!("handle session timeout: client session timeout, have not heard from server in {:?}ms",
-                        self.timeout_ms);
+                    warn!("handle session timeout: client session timeout, have not heard from server in {:?}",
+                        self.session_sent.elapsed());
                     self.reconnect_by_close();
                 },
                 Some(timeout)=> panic!("Not right type {:?} for session timer", timeout),
@@ -723,10 +725,12 @@ impl ZkIo {
             .expect("Register TIMER");
         self.poll.register(&self.rx, CHANNEL, Ready::readable(), pollopt())
             .expect("Register CHANNEL");
-
         // session timer
         self.poll.register(&self.session_timer, SESSION_TIMER, Ready::readable(), pollopt())
             .expect("Register SESSION_TIMER");
+
+        // start the session timeout
+        self.update_session_timeout();
 
         loop {
             // Handle loop shutdown
