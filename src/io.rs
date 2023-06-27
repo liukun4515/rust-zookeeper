@@ -163,8 +163,6 @@ impl ZkIo {
 
         let request = zkio.connect_request();
         zkio.buffer.push_back(request);
-        // // begin the session timeout
-        // zkio.update_session_timeout();
         zkio
     }
 
@@ -638,7 +636,6 @@ impl ZkIo {
                         self.session_sent.elapsed());
                     self.reconnect_by_close();
                 },
-                Some(session_timeout) => panic!("Not right type {:?} for session timer", session_timeout),
                 None => {
                     if self.session_timeout.is_some() {
                         trace!("Spurious session timer");
