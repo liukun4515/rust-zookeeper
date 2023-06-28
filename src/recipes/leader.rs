@@ -9,6 +9,7 @@ use std::{
         Arc, Mutex,
     },
 };
+use WatchedEventType;
 
 const LATCH_PREFIX: &str = "latch";
 
@@ -299,11 +300,17 @@ fn handle_pre_znode_change(latch: &LeaderLatch, ev: WatchedEvent) {
 
 fn handle_self_znode_change(latch: &LeaderLatch, ev: WatchedEvent) {
     log::info!("receive self znode watch event {:?}", ev);
-    // if the self node was deleted, it will throw error when do the `check_leadership`
-    latch.set_leadership(false);
-    // change the latch state to failed
-    // this is should be handled by user
-    latch.become_failed(ZkError::NoNode);
+    match ev.event_type {
+        WatchedEventType::NodeDeleted => {
+            // if the self node was deleted, it will throw error when do the `check_leadership`
+            latch.set_leadership(false);
+            // change the latch state to failed
+            // this is should be handled by user
+            latch.become_failed(ZkError::NoNode);
+        }
+        _ => {
+        }
+    }
 }
 
 fn handle_state_change(latch: &LeaderLatch, zk_state: ZkState) {
