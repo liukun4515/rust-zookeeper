@@ -11,12 +11,12 @@ use mio::net::TcpStream;
 use mio::*;
 use mio_extras::channel::{Sender, Receiver, channel};
 use mio_extras::timer::{Timer, Timeout};
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::io::{Cursor, ErrorKind};
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
-use std::sync::mpsc;
+use std::sync::{Arc, mpsc, Mutex};
 use std::mem;
 
 const ZK: Token = Token(1);
@@ -31,6 +31,7 @@ const AUTHPACKET_XID: i32 = -4;
 const SET_WATCHES_XID: i32 = -8;
 
 use try_io::{TryRead, TryWrite};
+use ::{Watch, WatchType};
 
 lazy_static! {
     static ref PING: ByteBuf =
@@ -108,6 +109,8 @@ pub struct ZkIo {
     session_timeout: Option<Timeout>,
     session_timer: Timer<ZkSessionTimeout>,
     session_sent: Instant,
+    // watches
+    watches: Arc<Mutex<HashMap<String, Vec<Watch>>>>,
 }
 const MAX_INTERVAL_PING_MS : u64 = 20000;
 const MIN_INTERVAL_CONNECT_SERVER_MS : u64 = 5000;
@@ -117,7 +120,8 @@ impl ZkIo {
         addrs: Vec<SocketAddr>,
         session_timeout_duration: Duration,
         watch_sender: mpsc::Sender<WatchMessage>,
-        state_listeners: ListenerSet<ZkState>
+        state_listeners: ListenerSet<ZkState>,
+        watches: Arc<Mutex<HashMap<String, Vec<Watch>>>>
     ) -> ZkIo {
         trace!("ZkIo::new");
         let timeout_ms = session_timeout_duration.as_secs() * 1000 +
@@ -165,6 +169,7 @@ impl ZkIo {
             session_timeout: None,
             session_timer: Timer::default(),
             session_sent: Instant::now(),
+            watches,
         };
 
         let request = zkio.connect_request();
@@ -486,11 +491,37 @@ impl ZkIo {
     }
 
     fn watch_request(&self) -> RawRequest {
+        let mut data_watches = vec![];
+        let mut exist_watches = vec![];
+        let mut child_watches = vec![];
+
+        {
+            // get all watches path
+            let locks = self.watches.lock().unwrap();
+            locks.iter().for_each(|(path, watch_vec)| {
+                for watch in watch_vec {
+                    match watch.watch_type {
+                        WatchType::Exist => {
+                            exist_watches.push(path.to_string());
+                        }
+                        WatchType::Data => {
+                            data_watches.push(path.to_string());
+                        }
+                        WatchType::Child => {
+                            child_watches.push(path.to_string());
+                        }
+                    }
+                }
+            });
+        }
+
+        info!("Get setWatches arguments: data_watches {:?}, exist_watches {:?}, child_watches {:?}",
+            data_watches, exist_watches, child_watches);
         let record = SetWatchesRequest {
             relateive_zxid: self.zxid,
-            data_watches: vec![],
-            exist_watches: vec![],
-            child_watches: vec![],
+            data_watches,
+            exist_watches,
+            child_watches,
         };
         let opcode = OpCode::SetWatches;
         let request_header = RequestHeader {

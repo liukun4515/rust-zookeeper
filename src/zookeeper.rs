@@ -78,7 +78,8 @@ impl ZooKeeper {
         let (watch, watch_sender) = ZkWatch::new(watcher, chroot.clone());
         let listeners = ListenerSet::<ZkState>::new();
         let listeners1 = listeners.clone();
-        let io = ZkIo::new(addrs.clone(), session_timeout, watch_sender, listeners1);
+        let watches = watch.get_watches();
+        let io = ZkIo::new(addrs.clone(), session_timeout, watch_sender, listeners1, watches);
         let sender = io.sender();
 
         try!(Self::zk_thread("event", move || watch.run().unwrap()));
