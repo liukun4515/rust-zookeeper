@@ -1,5 +1,5 @@
 use crate::{
-    paths, Acl, CreateMode, Subscription, WatchedEvent, WatchedEventType, ZkError, ZkResult,
+    paths, Acl, CreateMode, Subscription, WatchedEvent, ZkError, ZkResult,
     ZkState, ZooKeeper,
 };
 use std::{
@@ -132,7 +132,7 @@ impl LeaderLatch {
                     self.set_leadership(false);
                     let latch = self.clone();
                     self.zk.exists_w(&znodes[index - 1].path, move |ev| {
-                        handle_znode_change(&latch, ev)
+                        handle_pre_znode_change(&latch, ev)
                     })?;
                 }
                 None => {
@@ -247,7 +247,7 @@ fn create_latch_znode(ll: &LeaderLatch, parent_path: &str, id: &str) -> ZkResult
     // add the handle_znode_change to the freshly created znode
     let latch = ll.clone();
     ll.zk.exists_w(&zrsp, move |ev| {
-        handle_znode_change(&latch, ev)
+        handle_self_znode_change(&latch, ev)
     })?;
     Ok(zrsp)
 }
@@ -283,29 +283,32 @@ fn ensure_path(zk: &ZooKeeper, path: &str) -> ZkResult<()> {
     Ok(())
 }
 
-fn handle_znode_change(latch: &LeaderLatch, ev: WatchedEvent) {
-    log::info!("receive znode watch event {:?}", ev);
-    if let WatchedEventType::NodeDeleted = ev.event_type {
-        log::info!("receive znode watch event {:?}, the path {:?}", ev.event_type, ev.path);
-        if let Err(e) = latch.check_leadership() {
-            // TODO: how to do if got error when check leader ship:
-            // 1. this latch has created the znode in the zk server
-            // 2. when `check_leadership`, meet some issues about network or other issues
-            // 3. this latch will lost the role of leader, and other latch can't become the leader
-            log::error!("failed to check for leadership: {:?}", e);
-            // TODO: don't change the leader ship
-            latch.set_leadership(false);
-            // change the latch state to failed
-            // this is should be handled by user
-            latch.become_failed(e);
-        }
+fn handle_pre_znode_change(latch: &LeaderLatch, ev: WatchedEvent) {
+    log::info!("receive pre znode watch event {:?}", ev);
+    if let Err(e) = latch.check_leadership() {
+        // 1. this latch has created the znode in the zk server
+        // 2. when `check_leadership`, meet some issues about network or other issues
+        // 3. this latch will lost the role of leader, and other latch can't become the leader
+        log::error!("failed to check for leadership: {:?}", e);
+        latch.set_leadership(false);
+        // change the latch state to failed
+        // this is should be handled by user
+        latch.become_failed(e);
     }
+}
+
+fn handle_self_znode_change(latch: &LeaderLatch, ev: WatchedEvent) {
+    log::info!("receive self znode watch event {:?}", ev);
+    // if the self node was deleted, it will throw error when do the `check_leadership`
+    latch.set_leadership(false);
+    // change the latch state to failed
+    // this is should be handled by user
+    latch.become_failed(ZkError::NoNode);
 }
 
 fn handle_state_change(latch: &LeaderLatch, zk_state: ZkState) {
     if let ZkState::Closed = zk_state {
         log::warn!("got the connection closed notification with zookeeper, and need to set LeaderLatch to Failed");
-        // TODO: don't change the leader ship
         latch.set_leadership(false);
         let error = ZkError::ConnectionLoss;
         // maybe got the close signal before start the leader election
