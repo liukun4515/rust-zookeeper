@@ -288,6 +288,9 @@ impl ZkIo {
                 }
             };
 
+            // TODO clear timeout
+            self.clear_timeout(ZkTimeout::Connect);
+
             let old_state = self.state;
             if conn_resp.timeout <= 0 {
                 // we don't get the right timeout from the server, and should close the connection.
