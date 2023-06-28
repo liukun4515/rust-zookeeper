@@ -515,8 +515,8 @@ impl ZkIo {
             });
         }
 
-        info!("Get setWatches arguments: data_watches {:?}, exist_watches {:?}, child_watches {:?}",
-            data_watches, exist_watches, child_watches);
+        info!("Get setWatches arguments zxid {:?} : data_watches {:?}, exist_watches {:?}, child_watches {:?}",
+            self.zxid, data_watches, exist_watches, child_watches);
         let record = SetWatchesRequest {
             relateive_zxid: self.zxid,
             data_watches,
