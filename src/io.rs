@@ -600,7 +600,7 @@ impl ZkIo {
             match self.sock.try_read_buf(&mut self.response) {
                 Ok(Some(0)) => {
                     warn!("Connection read closed");
-                    // self.reconnect_by_close();
+                    self.reconnect_by_close();
                     // self.reconnect();
                     return;
                 }
