@@ -254,6 +254,7 @@ impl ZkIo {
                 }
                 SET_WATCHES_XID => {
                     info!("=====Got set watches xid: {:?}", response);
+                    self.inflight.pop_front();
                 }
                 _ => {
                     info!("handle_response Got other event, header: {:?}", response.header);
