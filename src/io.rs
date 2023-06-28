@@ -289,9 +289,8 @@ impl ZkIo {
                 }
             };
 
-            // TODO clear timeout
+            // Got the connection response, and clear the timeout for connection.
             self.clear_timeout(ZkTimeout::Connect);
-
             let old_state = self.state;
             if conn_resp.timeout <= 0 {
                 // we don't get the right timeout from the server, and should close the connection.
@@ -403,16 +402,14 @@ impl ZkIo {
     }
 
     fn reconnect_by_close(&mut self) {
-
         // clear the session timeout
-        self.clear_session_timeout();
+        // self.clear_session_timeout();
 
         // let old_state = self.state;
         // self.state = ZkState::Closed;
         // info!("reconnect by close: from state {:?} to state {:?}", old_state, ZkState::Closed);
         // self.notify_state(old_state, self.state);
         // self.shutdown = true;
-
 
         self.reconnect();
     }
@@ -434,16 +431,6 @@ impl ZkIo {
             self.buffer.clear();
             self.inflight.clear();
             self.response.clear(); // TODO drop all read bytes once RingBuf.clear() is merged
-
-            // Check if the session is still alive according to our knowledge
-            // TODO reconnect don't do this
-            // if self.ping_sent.elapsed().as_secs() * 1000 > self.timeout_ms {
-            //     error!("Because the client doesn't ping server in time, the zk session may timeout, closing io event loop");
-            //     self.state = ZkState::Closed;
-            //     self.notify_state(ZkState::Connecting, self.state);
-            //     self.shutdown = true;
-            //     break;
-            // }
 
             self.clear_timeout(ZkTimeout::Ping);
             self.clear_timeout(ZkTimeout::Connect);
@@ -625,11 +612,8 @@ impl ZkIo {
             // self.reconnect();
         }
 
+        // start the ping timeout after each zk read/write
         self.start_timeout(ZkTimeout::Ping);
-
-        // if self.is_idle() {
-        //     self.start_timeout(ZkTimeout::Ping);
-        // }
 
         // Not sure that we need to write, but we always need to read, because of watches
         // If the output buffer has no content, we don't need to write again
@@ -678,6 +662,15 @@ impl ZkIo {
             .expect("Reregister CHANNEL");
     }
 
+    fn do_session_timeout(&mut self) {
+        self.clear_session_timeout();
+        let old_state = self.state;
+        self.state = ZkState::Closed;
+        info!("reconnect by close: from state {:?} to state {:?}", old_state, ZkState::Closed);
+        self.notify_state(old_state, self.state);
+        self.shutdown = true;
+    }
+
     fn ready_session_timer(&mut self, _: Ready) {
         trace!("ready_session_timer thread={:?}", ::std::thread::current().id());
         loop {
@@ -685,15 +678,7 @@ impl ZkIo {
                 Some(ZkSessionTimeout::Session) => {
                     warn!("handle session timeout: client session timeout, have not heard from server in {:?}",
                         self.session_sent.elapsed());
-
-                    // TODO can be deleted.
-                    self.clear_session_timeout();
-                    let old_state = self.state;
-                    self.state = ZkState::Closed;
-                    info!("reconnect by close: from state {:?} to state {:?}", old_state, ZkState::Closed);
-                    self.notify_state(old_state, self.state);
-                    self.shutdown = true;
-
+                    self.do_session_timeout();
                     // self.reconnect_by_close();
                 },
                 None => {
