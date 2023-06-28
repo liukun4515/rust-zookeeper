@@ -229,7 +229,7 @@ impl ZkIo {
             };
             if header.zxid > 0 {
                 // Update last-seen zxid when this is a request response
-                info!("Got new zxid: {:?}", header.zxid);
+                trace!("Get new zxid: {:?}", header.zxid);
                 self.zxid = header.zxid;
             }
             let response = RawResponse {
@@ -259,7 +259,7 @@ impl ZkIo {
                     panic!("Got auth pack xid");
                 }
                 SET_WATCHES_XID => {
-                    info!("=====Got set watches xid: {:?}", response);
+                    info!("Get set watches: {:?}", response);
                     self.inflight.pop_front();
                 }
                 _ => {
