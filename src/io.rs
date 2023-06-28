@@ -621,9 +621,11 @@ impl ZkIo {
             // self.reconnect();
         }
 
-        if self.is_idle() {
-            self.start_timeout(ZkTimeout::Ping);
-        }
+        self.start_timeout(ZkTimeout::Ping);
+
+        // if self.is_idle() {
+        //     self.start_timeout(ZkTimeout::Ping);
+        // }
 
         // Not sure that we need to write, but we always need to read, because of watches
         // If the output buffer has no content, we don't need to write again
