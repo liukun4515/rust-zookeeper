@@ -229,6 +229,7 @@ impl ZkIo {
             };
             if header.zxid > 0 {
                 // Update last-seen zxid when this is a request response
+                info!("Got new zxid: {:?}", header.zxid);
                 self.zxid = header.zxid;
             }
             let response = RawResponse {
@@ -262,9 +263,10 @@ impl ZkIo {
                     self.inflight.pop_front();
                 }
                 _ => {
-                    info!("handle_response Got other event, header: {:?}", response.header);
                     match self.inflight.pop_front() {
                         Some(request) => {
+                            info!("handle_response Got other event, op: {:?}, header: {:?}",
+                                request.opcode, response.header);
                             if request.opcode == OpCode::CloseSession {
                                 warn!("Got the close session request, will close the io event loop");
                                 let old_state = self.state;
@@ -598,7 +600,7 @@ impl ZkIo {
             match self.sock.try_read_buf(&mut self.response) {
                 Ok(Some(0)) => {
                     warn!("Connection read closed");
-                    self.reconnect_by_close();
+                    // self.reconnect_by_close();
                     // self.reconnect();
                     return;
                 }
