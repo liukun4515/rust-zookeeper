@@ -432,13 +432,14 @@ impl ZkIo {
             self.response.clear(); // TODO drop all read bytes once RingBuf.clear() is merged
 
             // Check if the session is still alive according to our knowledge
-            if self.ping_sent.elapsed().as_secs() * 1000 > self.timeout_ms {
-                error!("Because the client doesn't ping server in time, the zk session may timeout, closing io event loop");
-                self.state = ZkState::Closed;
-                self.notify_state(ZkState::Connecting, self.state);
-                self.shutdown = true;
-                break;
-            }
+            // TODO reconnect don't do this
+            // if self.ping_sent.elapsed().as_secs() * 1000 > self.timeout_ms {
+            //     error!("Because the client doesn't ping server in time, the zk session may timeout, closing io event loop");
+            //     self.state = ZkState::Closed;
+            //     self.notify_state(ZkState::Connecting, self.state);
+            //     self.shutdown = true;
+            //     break;
+            // }
 
             self.clear_timeout(ZkTimeout::Ping);
             self.clear_timeout(ZkTimeout::Connect);
