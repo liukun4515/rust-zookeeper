@@ -244,6 +244,7 @@ fn create_latch_znode(ll: &LeaderLatch, parent_path: &str, id: &str) -> ZkResult
         Acl::open_unsafe().clone(),
         CreateMode::EphemeralSequential,
     )?;
+    info!("create self node path {:?} for leader latch", zrsp);
     // add the handle_znode_change to the freshly created znode
     let latch = ll.clone();
     ll.zk.exists_w(&zrsp, move |ev| {
