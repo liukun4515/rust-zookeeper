@@ -122,10 +122,11 @@ impl LeaderLatch {
 
     fn check_leadership(&self) -> ZkResult<()> {
         let znodes = get_latch_znodes(&self.zk, &self.parent_path)?;
+        info!("check leadership: current nodes {:?}", znodes);
         if let Some(path) = &*self.path.lock().unwrap() {
             match znodes.iter().position(|znode| &znode.path == path) {
                 Some(0) => {
-                    log::info!("become the leader");
+                    log::info!("{:?} become the leader", path);
                     self.set_leadership(true);
                 }
                 Some(index) => {
