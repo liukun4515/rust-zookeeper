@@ -111,8 +111,8 @@ impl ZooKeeper {
                         },
                     }
                 }
-                Err(_) => {
-                    warn!("Can't convert to the socket address for {:?}", addr_str);
+                Err(error) => {
+                    warn!("Can't convert to the socket address for {:?}, with reason {:?}", addr_str, error);
                     continue;
                     // return Err(ZkError::BadArguments)
                 },
