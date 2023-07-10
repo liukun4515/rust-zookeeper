@@ -6,6 +6,7 @@ use std::sync::mpsc::{self, Sender, Receiver};
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::io;
+use std::sync::{Arc, Mutex};
 
 /// Represents a change on the ZooKeeper that a `Watcher` is able to respond to.
 ///
@@ -68,23 +69,28 @@ pub enum WatchMessage {
 
 pub struct ZkWatch<W: Watcher> {
     watcher: W,
-    watches: HashMap<String, Vec<Watch>>,
+    // watches: HashMap<String, Vec<Watch>>,
+    watches: Arc<Mutex<HashMap<String, Vec<Watch>>>>,
     chroot: Option<String>,
     rx: Receiver<WatchMessage>,
 }
 
 impl<W: Watcher> ZkWatch<W> {
+
     pub fn new(watcher: W, chroot: Option<String>) -> (Self, Sender<WatchMessage>) {
         trace!("ZkWatch::new");
         let (tx, rx) = mpsc::channel();
-
-        let watch = ZkWatch {
-            watches: HashMap::new(),
-            watcher: watcher,
-            chroot: chroot,
-            rx
-        };
+            let watch = ZkWatch {
+                watches: Arc::new(Mutex::new(HashMap::new())),
+                watcher: watcher,
+                chroot: chroot,
+                rx
+            };
         (watch, tx)
+    }
+
+    pub fn get_watches(&self) -> Arc<Mutex<HashMap<String, Vec<Watch>>>> {
+        self.watches.clone()
     }
 
     pub fn run(mut self) -> io::Result<()> {
@@ -114,7 +120,8 @@ impl<W: Watcher> ZkWatch<W> {
                 }
             }
             WatchMessage::Watch(watch) => {
-                self.watches.entry(watch.path.clone()).or_insert(vec![]).push(watch);
+                let mut lock = self.watches.lock().unwrap();
+                lock.entry(watch.path.clone()).or_insert(vec![]).push(watch);
             }
         }
     }
@@ -143,7 +150,8 @@ impl<W: Watcher> ZkWatch<W> {
 
     fn find_watches(&mut self, event: &WatchedEvent) -> Option<Vec<Watch>> {
         if let Some(ref path) = event.path {
-            match self.watches.remove(path) {
+            let mut lock = self.watches.lock().unwrap();
+            match lock.remove(path) {
                 Some(watches) => {
 
                     let (matching, left): (_, Vec<Watch>) = watches.into_iter().partition(|w| {
@@ -159,7 +167,8 @@ impl<W: Watcher> ZkWatch<W> {
 
                     // put back the remaining watches
                     if !left.is_empty() {
-                        self.watches.insert(path.to_owned(), left);
+                        let mut lock = self.watches.lock().unwrap();
+                        lock.insert(path.to_owned(), left);
                     }
                     if matching.is_empty() {
                         None

@@ -1,7 +1,6 @@
 use std::cmp::min;
 use consts::{ZkError, ZkState};
-use proto::{ByteBuf, ConnectRequest, ConnectResponse, OpCode, ReadFrom, ReplyHeader, RequestHeader,
-            WriteTo};
+use proto::{ByteBuf, ConnectRequest, ConnectResponse, OpCode, ReadFrom, ReplyHeader, RequestHeader, SetWatchesRequest, to_len_prefixed_buf, WriteTo};
 use watch::WatchMessage;
 use zookeeper::{RawResponse, RawRequest};
 use listeners::ListenerSet;
@@ -12,12 +11,12 @@ use mio::net::TcpStream;
 use mio::*;
 use mio_extras::channel::{Sender, Receiver, channel};
 use mio_extras::timer::{Timer, Timeout};
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::io::{Cursor, ErrorKind};
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
-use std::sync::mpsc;
+use std::sync::{Arc, mpsc, Mutex};
 use std::mem;
 
 const ZK: Token = Token(1);
@@ -25,12 +24,20 @@ const TIMER: Token = Token(2);
 const CHANNEL: Token = Token(3);
 const SESSION_TIMER: Token = Token(4);
 
+// Copy from the java
+const NOTIFICATION_XID: i32 = -1;
+const PING_XID: i32 = -2;
+const AUTHPACKET_XID: i32 = -4;
+const SET_WATCHES_XID: i32 = -8;
+
 use try_io::{TryRead, TryWrite};
+use ::{Watch, WatchType};
 
 lazy_static! {
     static ref PING: ByteBuf =
     RequestHeader{xid: -2, opcode: OpCode::Ping}.to_len_prefixed_buf().unwrap();
 }
+
 
 struct Hosts {
     addrs: Vec<SocketAddr>,
@@ -102,6 +109,8 @@ pub struct ZkIo {
     session_timeout: Option<Timeout>,
     session_timer: Timer<ZkSessionTimeout>,
     session_sent: Instant,
+    // watches
+    watches: Arc<Mutex<HashMap<String, Vec<Watch>>>>,
 }
 const MAX_INTERVAL_PING_MS : u64 = 20000;
 const MIN_INTERVAL_CONNECT_SERVER_MS : u64 = 5000;
@@ -111,7 +120,8 @@ impl ZkIo {
         addrs: Vec<SocketAddr>,
         session_timeout_duration: Duration,
         watch_sender: mpsc::Sender<WatchMessage>,
-        state_listeners: ListenerSet<ZkState>
+        state_listeners: ListenerSet<ZkState>,
+        watches: Arc<Mutex<HashMap<String, Vec<Watch>>>>
     ) -> ZkIo {
         trace!("ZkIo::new");
         let timeout_ms = session_timeout_duration.as_secs() * 1000 +
@@ -159,6 +169,7 @@ impl ZkIo {
             session_timeout: None,
             session_timer: Timer::default(),
             session_sent: Instant::now(),
+            watches,
         };
 
         let request = zkio.connect_request();
@@ -218,6 +229,7 @@ impl ZkIo {
             };
             if header.zxid > 0 {
                 // Update last-seen zxid when this is a request response
+                trace!("Get new zxid: {:?}", header.zxid);
                 self.zxid = header.zxid;
             }
             let response = RawResponse {
@@ -226,12 +238,12 @@ impl ZkIo {
             }; // TODO COPY!
             match response.header.xid {
                 // NOTIFICATION_XID
-                -1 => {
+                NOTIFICATION_XID => {
                     info!("handle_response Got a watch event, header: {:?}", response.header);
                     self.watch_sender.send(WatchMessage::Event(response)).unwrap();
                 }
                 // PING_XID
-                -2 => {
+                PING_XID => {
                     let ping_time_cost = self.ping_sent.elapsed();
                     if ping_time_cost.as_millis() > (self.timeout_ms / 4) as u128 {
                         // too slow between the client the zk server
@@ -242,10 +254,19 @@ impl ZkIo {
                     }
                     self.inflight.pop_front();
                 }
+                AUTHPACKET_XID => {
+                    error!("Got auth pack xid");
+                    panic!("Got auth pack xid");
+                }
+                SET_WATCHES_XID => {
+                    info!("Get set watches: {:?}", response);
+                    self.inflight.pop_front();
+                }
                 _ => {
-                    info!("handle_response Got other event, header: {:?}", response.header);
                     match self.inflight.pop_front() {
                         Some(request) => {
+                            info!("handle_response Got other event, op: {:?}, header: {:?}",
+                                request.opcode, response.header);
                             if request.opcode == OpCode::CloseSession {
                                 warn!("Got the close session request, will close the io event loop");
                                 let old_state = self.state;
@@ -275,6 +296,8 @@ impl ZkIo {
                 }
             };
 
+            // Got the connection response, and clear the timeout for connection.
+            self.clear_timeout(ZkTimeout::Connect);
             let old_state = self.state;
             if conn_resp.timeout <= 0 {
                 // we don't get the right timeout from the server, and should close the connection.
@@ -387,13 +410,15 @@ impl ZkIo {
 
     fn reconnect_by_close(&mut self) {
         // clear the session timeout
-        self.clear_session_timeout();
+        // self.clear_session_timeout();
 
-        let old_state = self.state;
-        self.state = ZkState::Closed;
-        info!("reconnect by close: from state {:?} to state {:?}", old_state, ZkState::Closed);
-        self.notify_state(old_state, self.state);
-        self.shutdown = true;
+        // let old_state = self.state;
+        // self.state = ZkState::Closed;
+        // info!("reconnect by close: from state {:?} to state {:?}", old_state, ZkState::Closed);
+        // self.notify_state(old_state, self.state);
+        // self.shutdown = true;
+
+        self.reconnect();
     }
 
     fn reconnect(&mut self) {
@@ -413,15 +438,6 @@ impl ZkIo {
             self.buffer.clear();
             self.inflight.clear();
             self.response.clear(); // TODO drop all read bytes once RingBuf.clear() is merged
-
-            // Check if the session is still alive according to our knowledge
-            if self.ping_sent.elapsed().as_secs() * 1000 > self.timeout_ms {
-                error!("Because the client doesn't ping server in time, the zk session may timeout, closing io event loop");
-                self.state = ZkState::Closed;
-                self.notify_state(ZkState::Connecting, self.state);
-                self.shutdown = true;
-                break;
-            }
 
             self.clear_timeout(ZkTimeout::Ping);
             self.clear_timeout(ZkTimeout::Connect);
@@ -446,8 +462,14 @@ impl ZkIo {
             }
             self.start_timeout(ZkTimeout::Connect);
 
+            // connect request
             let request = self.connect_request();
             self.buffer.push_back(request);
+
+            // set watches request
+            // TODO: get all watches path
+            let watches_request = self.watch_request();
+            self.buffer.push_back(watches_request);
 
 
             // Register the new socket
@@ -464,6 +486,53 @@ impl ZkIo {
         let buf = conn_req.to_len_prefixed_buf().unwrap();
         RawRequest {
             opcode: OpCode::Auth,
+            data: buf,
+            listener: None,
+            watch: None,
+        }
+    }
+
+    fn watch_request(&self) -> RawRequest {
+        let mut data_watches = vec![];
+        let mut exist_watches = vec![];
+        let mut child_watches = vec![];
+
+        {
+            // get all watches path
+            let locks = self.watches.lock().unwrap();
+            locks.iter().for_each(|(path, watch_vec)| {
+                for watch in watch_vec {
+                    match watch.watch_type {
+                        WatchType::Exist => {
+                            exist_watches.push(path.to_string());
+                        }
+                        WatchType::Data => {
+                            data_watches.push(path.to_string());
+                        }
+                        WatchType::Child => {
+                            child_watches.push(path.to_string());
+                        }
+                    }
+                }
+            });
+        }
+
+        info!("Get setWatches arguments zxid {:?} : data_watches {:?}, exist_watches {:?}, child_watches {:?}",
+            self.zxid, data_watches, exist_watches, child_watches);
+        let record = SetWatchesRequest {
+            relateive_zxid: self.zxid,
+            data_watches,
+            exist_watches,
+            child_watches,
+        };
+        let opcode = OpCode::SetWatches;
+        let request_header = RequestHeader {
+            xid: SET_WATCHES_XID,
+            opcode,
+        };
+        let buf = to_len_prefixed_buf(request_header, record).expect("can't serialize the set watches request");
+        RawRequest {
+            opcode,
             data: buf,
             listener: None,
             watch: None,
@@ -576,9 +645,8 @@ impl ZkIo {
             // self.reconnect();
         }
 
-        if self.is_idle() {
-            self.start_timeout(ZkTimeout::Ping);
-        }
+        // start the ping timeout after each zk read/write
+        self.start_timeout(ZkTimeout::Ping);
 
         // Not sure that we need to write, but we always need to read, because of watches
         // If the output buffer has no content, we don't need to write again
@@ -627,6 +695,15 @@ impl ZkIo {
             .expect("Reregister CHANNEL");
     }
 
+    fn do_session_timeout(&mut self) {
+        self.clear_session_timeout();
+        let old_state = self.state;
+        self.state = ZkState::Closed;
+        info!("reconnect by close: from state {:?} to state {:?}", old_state, ZkState::Closed);
+        self.notify_state(old_state, self.state);
+        self.shutdown = true;
+    }
+
     fn ready_session_timer(&mut self, _: Ready) {
         trace!("ready_session_timer thread={:?}", ::std::thread::current().id());
         loop {
@@ -634,7 +711,8 @@ impl ZkIo {
                 Some(ZkSessionTimeout::Session) => {
                     warn!("handle session timeout: client session timeout, have not heard from server in {:?}",
                         self.session_sent.elapsed());
-                    self.reconnect_by_close();
+                    self.do_session_timeout();
+                    // self.reconnect_by_close();
                 },
                 None => {
                     if self.session_timeout.is_some() {

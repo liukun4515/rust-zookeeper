@@ -20,6 +20,7 @@ pub enum OpCode {
     SetData = 5,
     Ping = 11,
     CloseSession = -11,
+    SetWatches = 101,
 }
 
 pub type ByteBuf = Cursor<Vec<u8>>;
@@ -156,7 +157,16 @@ impl ReadFrom for Stat {
         })
     }
 }
-
+// The request defined in the java
+// public class ConnectRequest implements Record {
+// private int protocolVersion;
+// private long lastZxidSeen;
+// private int timeOut;
+// private long sessionId;
+// private byte[] passwd;
+// private boolean readOnly;
+// public ConnectRequest() {
+// }
 pub struct ConnectRequest {
     protocol_version: i32,
     last_zxid_seen: i64,
@@ -224,6 +234,32 @@ impl ReadFrom for ConnectResponse {
             //  https://github.com/apache/zookeeper/blob/master/zookeeper-server/src/main/java/org/apache/zookeeper/ClientCnxnSocket.java#L143-L154
             read_only: reader.read_u8().map_or(false, |v| v != 0),
         })
+    }
+}
+
+// The set watch defined in the java
+// public class SetWatches implements Record {
+// private long relativeZxid;
+// private java.util.List<String> dataWatches;
+// private java.util.List<String> existWatches;
+// private java.util.List<String> childWatches;
+// public SetWatches() {
+// }
+#[derive(Debug)]
+pub struct SetWatchesRequest {
+    pub relateive_zxid: i64,
+    pub data_watches: Vec<String>,
+    pub exist_watches: Vec<String>,
+    pub child_watches: Vec<String>,
+}
+
+impl WriteTo for SetWatchesRequest {
+    fn write_to(&self, writer: &mut dyn Write) -> Result<()> {
+        try!(writer.write_i64::<BigEndian>(self.relateive_zxid));
+        try!(self.data_watches.write_to(writer));
+        try!(self.exist_watches.write_to(writer));
+        try!(self.child_watches.write_to(writer));
+        Ok(())
     }
 }
 
